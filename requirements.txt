@@ -1,8 +1,7 @@
 numpy
 scipy
 pandas
-networkx
 tqdm
 scikit-learn
-torch
-torch-geometric
+torch>=2.0
+torch-geometric>=2.6

@@ -1,4 +1,4 @@
-﻿import argparse
+import argparse
 import builtins
 import datetime
 import gc
@@ -9,7 +9,8 @@ import sys
 import numpy as np
 import torch
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'code'))
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(PROJECT_ROOT, 'code'))
 
 from train_eval import train_epochs
 from model_fars_final import FARSRadialFrequencyFinal
@@ -55,7 +56,7 @@ def configure_reproducibility(seed):
         torch.use_deterministic_algorithms(True)
 
 
-def extract_subgraph(split_data, fold_idx, seed_value, data_name, hop, preprocess_workers, preprocess_chunksize, association_retain_ratio=1.0):
+def extract_subgraph(split_data, fold_idx, seed_value, data_name, hop, preprocess_workers, preprocess_chunksize, association_retain_ratio=1.0, cache_root=None):
     if data_name == 'Gdataset':
         print('Using Gdataset with 10% testing...')
     elif data_name == 'Cdataset':
@@ -70,7 +71,9 @@ def extract_subgraph(split_data, fold_idx, seed_value, data_name, hop, preproces
 
     val_test_appendix = str(fold_idx) + '_kfold'
     seed_appendix = 'seed_{}'.format(seed_value)
-    cache_parts = ['data', data_name]
+    if cache_root is None:
+        cache_root = os.path.join(PROJECT_ROOT, 'data')
+    cache_parts = [os.path.abspath(cache_root), data_name]
     if association_retain_ratio < 1.0:
         cache_parts.append(format_association_retain_tag(association_retain_ratio))
     cache_parts.extend([seed_appendix, val_test_appendix])
@@ -103,7 +106,7 @@ def extract_subgraph(split_data, fold_idx, seed_value, data_name, hop, preproces
 
 
 def main():
-    parser = argparse.ArgumentParser(description='FARS final 20260321 release runner')
+    parser = argparse.ArgumentParser(description='Train FARS for drug-disease association prediction.')
     parser.add_argument('--dataset-list', nargs='*', default=['Gdataset', 'Cdataset', 'lrssl'])
     parser.add_argument('--seed-list', type=int, nargs='*', default=[20, 34, 42, 43, 61, 70, 83, 1024, 2014, 2047])
     parser.add_argument('--association-retain-ratio', type=float, default=1.0)
@@ -136,17 +139,16 @@ def main():
     parser.add_argument('--seed', type=int, default=1)
     args = parser.parse_args()
 
-    args.model_type = 'final'
     args.association_retain_ratio = normalize_association_retain_ratio(args.association_retain_ratio)
     args.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     configure_reproducibility(args.seed)
 
-    logs_dir = os.path.join(os.path.dirname(__file__), 'logs')
+    logs_dir = os.path.join(PROJECT_ROOT, 'logs')
     os.makedirs(logs_dir, exist_ok=True)
     ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     retain_tag = format_association_retain_tag(args.association_retain_ratio)
-    log_name = f'{ts}_{args.model_type}_release_{retain_tag}_fold{args.num_folds}_epoch{args.epochs}.txt'
+    log_name = f'{ts}_fars_{retain_tag}_fold{args.num_folds}_epoch{args.epochs}.txt'
     log_path = os.path.join(logs_dir, log_name)
 
     old_stdout = sys.stdout
@@ -154,7 +156,7 @@ def main():
         sys.stdout = TeeStream(old_stdout, log_fp)
         try:
             print(args)
-            print('log file', log_path)
+            print('log file', os.path.relpath(log_path, PROJECT_ROOT))
 
             for data_name in args.dataset_list:
                 print('################ dataset=', data_name, '################')
@@ -209,7 +211,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
-

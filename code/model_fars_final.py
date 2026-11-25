@@ -1,4 +1,4 @@
-﻿import torch
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.utils import dropout_edge
@@ -11,7 +11,7 @@ from model_fars_blocks import (
 
 
 class FARSFinalBackboneMixin:
-    """Backbone utilities for FARS final model."""
+    """Frequency-aware backbone used by the final FARS model."""
 
     def _init_backbone(
         self,
@@ -71,7 +71,7 @@ class FARSFinalBackboneMixin:
 
 
 class FARSRadialFrequencyFinal(torch.nn.Module, FARSFinalBackboneMixin):
-    """FARS final model."""
+    """FARS model with frequency-aware encoding and radial state-space readout."""
 
     def __init__(
         self,
@@ -190,4 +190,3 @@ class FARSRadialFrequencyFinal(torch.nn.Module, FARSFinalBackboneMixin):
         graph_state = F.dropout(graph_state, p=self.dropout_n, training=self.training)
         graph_state = self.lin2(graph_state)
         return graph_state[:, 0]
-

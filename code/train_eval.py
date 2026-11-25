@@ -4,7 +4,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import random
 from sklearn import metrics
-from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 try:
     from torch_geometric.loader import DataLoader
@@ -71,24 +70,6 @@ class AsymmetricLoss(nn.Module):
         return loss.mean()
 
 
-def _move_sim_data(sim_data, device):
-    if sim_data is None:
-        return None
-
-    def move_value(value):
-        if isinstance(value, torch.Tensor):
-            return value.to(device)
-        if isinstance(value, tuple):
-            return tuple(move_value(item) for item in value)
-        if isinstance(value, list):
-            return [move_value(item) for item in value]
-        return value
-
-    for key, value in vars(sim_data).items():
-        setattr(sim_data, key, move_value(value))
-    return sim_data
-
-
 def build_scheduler(optimizer, args):
     if args.scheduler == 'none':
         return None
@@ -116,7 +97,7 @@ def build_loss_function(args):
     raise ValueError('Unsupported loss type: {}'.format(args.loss_type))
 
 
-def train_epochs(train_dataset, test_dataset, model, args, sim_data=None):
+def train_epochs(train_dataset, test_dataset, model, args):
     num_workers = args.num_workers
     pin_memory = (args.device.type == 'cuda') and (not args.disable_pin_memory)
     base_seed = int(getattr(args, 'current_seed', getattr(args, 'seed', 0)))
@@ -145,15 +126,14 @@ def train_epochs(train_dataset, test_dataset, model, args, sim_data=None):
     model.to(args.device).reset_parameters()
     optimizer = torch.optim.Adam(model.parameters(), args.lr)
     scheduler = build_scheduler(optimizer, args)
-    sim_data = _move_sim_data(sim_data, args.device)
 
     start_epoch = 1
     pbar = range(start_epoch, args.epochs + start_epoch)
     best_epoch, best_auc, best_aupr = 0, 0, 0
     for epoch in pbar:
-        train_loss = train(model, optimizer, train_loader, args.device, args, sim_data)
+        train_loss = train(model, optimizer, train_loader, args.device, args)
         if epoch % args.valid_interval == 0:
-            roc_auc, aupr = evaluate_metric(model, test_loader, args.device, epoch, sim_data)
+            roc_auc, aupr = evaluate_metric(model, test_loader, args.device, epoch)
             current_lr = optimizer.param_groups[0]['lr']
             print("epoch {}".format(epoch), "train_loss {0:.4f}".format(train_loss),
                   "lr {0:.6g}".format(current_lr),
@@ -180,7 +160,7 @@ def num_graphs(data):
         raise ValueError('Unable to infer batch size from data object.')
 
 
-def train(model, optimizer, loader, device, args, sim_data=None):
+def train(model, optimizer, loader, device, args):
     model.train()
     total_loss = 0
     pbar = loader
@@ -189,10 +169,7 @@ def train(model, optimizer, loader, device, args, sim_data=None):
     for data in pbar:
         optimizer.zero_grad()
         true_label = data.to(device)
-        if sim_data is not None and hasattr(model, 'moe_fusion'):
-            predict = model(true_label, sim_data)
-        else:
-            predict = model(true_label, sim_data) if sim_data is not None else model(true_label)
+        predict = model(true_label)
 
         loss = loss_function(predict, true_label.y.view(-1))
 
@@ -203,7 +180,7 @@ def train(model, optimizer, loader, device, args, sim_data=None):
     return total_loss / len(loader.dataset)
 
 
-def evaluate_metric(model, loader, device, epoch, sim_data=None):
+def evaluate_metric(model, loader, device, epoch):
     model.eval()
     all_y_true = []
     all_y_score = []
@@ -211,7 +188,7 @@ def evaluate_metric(model, loader, device, epoch, sim_data=None):
     with torch.no_grad():
         for data in loader:
             data = data.to(device)
-            out = model(data, sim_data) if sim_data is not None else model(data)
+            out = model(data)
 
             y_true = data.y.view(-1).cpu().numpy()
             y_score = out.cpu().numpy()

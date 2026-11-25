@@ -1,3 +1,7 @@
-﻿
-code/kafnets.py
-code/model_fars_blocks.py
+__pycache__/
+*.py[cod]
+.venv/
+data/*
+!data/.gitkeep
+logs/*
+!logs/.gitkeep

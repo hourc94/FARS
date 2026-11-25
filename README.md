@@ -1,44 +1,64 @@
-﻿# FARS
+# FARS
 
-FARS: Frequency-Guided Radial Subgraph Learning for Drug Repositioning
+Code for **FARS: Frequency-Aware Radial Subgraph Learning for Drug Repositioning**.
 
-# Requirments
+## Installation
 
-```text
-python==3.10
-torch>=2.0
-torch-geometric>=2.6
-torch-scatter
-torch-sparse
-numpy
-scipy
-pandas
-networkx
-tqdm
-scikit-learn
-```
-
-Note: If there is a problem with `torch-sparse` or `torch-scatter` installation, please install the wheel version matching your PyTorch/CUDA from:
-https://pytorch-geometric.com/whl/
-
-# Datasets
-
-- Gdataset
-- Cdataset
-- LRSSL
-
-Place dataset files under `data/` with the same format as the original project.
-
-# How to use
+Use Python 3.10 and install the required packages:
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+```
+
+Reference environment: Python 3.10.11, PyTorch 2.6.0, PyTorch Geometric 2.7.0,
+and NumPy 2.2.6. Install a CUDA-compatible PyTorch build to use a GPU.
+The runner automatically uses CUDA when available, otherwise the CPU.
+
+## Files
+
+```text
+FARS/
+  run_fars_final.py
+  requirements.txt
+  code/
+    model_fars_final.py
+    model_fars_blocks.py
+    kafnets.py
+    train_eval.py
+    util_functions.py
+  drug_data/
+    Gdataset.mat
+    Cdataset.mat
+    lrssl.txt
+```
+
+Original benchmark files are included in `drug_data/`. Graph caches are
+generated in `data/` and training logs in `logs/`. All paths are relative
+to the project directory, independently of the current working directory.
+
+## Usage
+
+Check the available arguments:
+
+```bash
+python run_fars_final.py --help
+```
+
+Run one fold and one epoch on Gdataset:
+
+```bash
+python run_fars_final.py --dataset-list Gdataset --seed-list 20 --num-folds 1 --epochs 1
+```
+
+Run the full experiment:
+
+```bash
 python run_fars_final.py
 ```
 
-Example:
-
-```bash
-python run_fars_final.py --dataset-list lrssl --seed-list 2047 --fold-start 0 --num-folds 10 --epochs 60 --batch-size 64 --test-batch-size 512 --preprocess-workers 2 --attention-type gatv2 --radial-layers 2
-```
-
+The defaults use Gdataset, Cdataset, and LRSSL; 10 folds; 60 epochs;
+2-hop subgraphs; three encoder layers with dimensions 256/128/64;
+GATv2; two radial layers; and a 1:1 positive-to-sampled-negative ratio.
+The default seeds are `20 34 42 43 61 70 83 1024 2014 2047`.
+The full command runs 300 dataset/seed/fold combinations.
+Use `lrssl` (lowercase) as the LRSSL dataset argument.

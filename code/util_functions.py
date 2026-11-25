@@ -1,24 +1,22 @@
-﻿import gc
+"""Benchmark loading and pair-specific enclosing-subgraph construction."""
+
+import gc
 import os
-import torch
 import time
-import networkx as nx
+import multiprocessing as mp
+import warnings
+
 import numpy as np
 import pandas as pd
 import scipy.sparse as ssp
-import multiprocessing as mp
-
-from tqdm import tqdm
 from scipy import io
-from torch_geometric.data import Data, InMemoryDataset, Dataset
 from sklearn.model_selection import KFold
-
-import warnings
+import torch
+import torch.multiprocessing
+from torch_geometric.data import Data, InMemoryDataset
+from tqdm import tqdm
 
 warnings.simplefilter('ignore', ssp.SparseEfficiencyWarning)
-cur_dir = os.path.dirname(os.path.realpath(__file__))
-import torch.multiprocessing
-
 torch.multiprocessing.set_sharing_strategy('file_system')
 
 _SUBGRAPH_AROW = None
@@ -122,32 +120,6 @@ class MyDataset(InMemoryDataset):
             if 'slices' in locals():
                 del slices
             gc.collect()
-
-
-class MyDynamicDataset(Dataset):
-    def __init__(self, root, A, links, labels, h, drug_embedding=None, disease_embedding=None):
-        super(MyDynamicDataset, self).__init__(root)
-        self.Arow = SparseRowIndexer(A)
-        self.Acol = SparseColIndexer(A.tocsc())
-        self.links = links
-        self.labels = labels
-        self.h = h
-        self.n_drug = None if drug_embedding is None else drug_embedding.shape[0]
-        self.n_disease = None if disease_embedding is None else disease_embedding.shape[0]
-
-    def len(self):
-        return len(self.links[0])
-
-    def get(self, idx):
-        i, j = self.links[0][idx], self.links[1][idx]
-        g_label = self.labels[idx]
-        tmp = subgraph_extraction_labeling(
-            (i, j), self.Arow, self.Acol, g_label, self.h)
-        data = construct_pyg_graph(*tmp[0:6], interaction_pair=(tmp[6], tmp[7]))
-        if self.n_drug is not None and self.n_disease is not None:
-            data.interaction_pairs1 = torch.tensor(i, dtype=torch.long)
-            data.interaction_pairs2 = torch.tensor(j, dtype=torch.long)
-        return data
 
 
 def _init_subgraph_worker(Arow, Acol, hop):
@@ -265,94 +237,6 @@ def one_hot(idx, length):
     return x
 
 
-def row_normalize_matrix(matrix):
-    matrix = np.asarray(matrix, dtype=np.float32)
-    row_sums = matrix.sum(axis=1, keepdims=True)
-    row_sums[row_sums == 0] = 1.0
-    return matrix / row_sums
-
-
-def build_similarity_graph(sim, num_neighbor=5):
-    sim = np.asarray(sim)
-    if num_neighbor <= 0 or num_neighbor > sim.shape[0]:
-        num_neighbor = sim.shape[0]
-
-    neighbor = np.argpartition(-sim, kth=num_neighbor - 1, axis=1)[:, :num_neighbor]
-    row_index = np.arange(neighbor.shape[0]).repeat(neighbor.shape[1])
-    col_index = neighbor.reshape(-1)
-
-    edge_index = torch.from_numpy(np.array([row_index, col_index]).astype(np.int64))
-    values = torch.from_numpy(sim[row_index, col_index]).float()
-    return edge_index, values, (sim.shape[0], sim.shape[0])
-
-
-class SimilarityData:
-    def __init__(self, drug_embedding, disease_embedding, drug_edge, disease_edge):
-        self.drug_embedding = drug_embedding
-        self.disease_embedding = disease_embedding
-        self.drug_edge = drug_edge
-        self.disease_edge = disease_edge
-
-
-class GlobalTopologyData:
-    def __init__(self, edge_index, node_type, num_drug, num_disease):
-        self.edge_index = edge_index
-        self.node_type = node_type
-        self.num_drug = int(num_drug)
-        self.num_disease = int(num_disease)
-
-
-class PairDataset(Dataset):
-    def __init__(self, pairs, labels, num_drug, num_disease):
-        super(PairDataset, self).__init__(root=None)
-        self.pairs = torch.as_tensor(pairs, dtype=torch.long)
-        self.labels = torch.as_tensor(labels, dtype=torch.float32)
-        self.n_drug = int(num_drug)
-        self.n_disease = int(num_disease)
-
-    def len(self):
-        return int(self.labels.numel())
-
-    def get(self, idx):
-        pair = self.pairs[idx]
-        label = self.labels[idx]
-        data = Data(y=label.view(1))
-        data.interaction_pairs1 = pair[0].view(1)
-        data.interaction_pairs2 = pair[1].view(1)
-        return data
-
-
-def build_global_topology_data(adj_matrix):
-    drug_idx, disease_idx = ssp.find(adj_matrix)[:2]
-    num_drug, num_disease = adj_matrix.shape
-    disease_idx = disease_idx + num_drug
-
-    src = np.concatenate([drug_idx, disease_idx])
-    dst = np.concatenate([disease_idx, drug_idx])
-    edge_index = torch.as_tensor(np.stack([src, dst], axis=0), dtype=torch.long)
-    node_type = torch.cat(
-        [
-            torch.zeros(num_drug, dtype=torch.long),
-            torch.ones(num_disease, dtype=torch.long),
-        ],
-        dim=0,
-    )
-    return GlobalTopologyData(edge_index, node_type, num_drug, num_disease)
-
-
-def PyGGraph_to_nx(data):
-    edges = list(zip(data.edge_index[0, :].tolist(), data.edge_index[1, :].tolist()))
-    g = nx.from_edgelist(edges)
-    # In case some nodes are isolated
-    g.add_nodes_from(range(len(data.x)))
-    edge_types = {(u, v): data.edge_attr[i].item() for i, (u, v) in enumerate(edges)}
-    nx.set_edge_attributes(g, name='type', values=edge_types)
-    node_types = dict(zip(range(data.num_nodes), torch.argmax(data.x, 1).tolist()))
-    nx.set_node_attributes(g, name='type', values=node_types)
-    g.graph['rating'] = data.y.item()
-    return g
-
-
 def normalize_association_retain_ratio(association_retain_ratio):
     ratio = float(association_retain_ratio)
     if ratio > 1.0:
@@ -371,49 +255,18 @@ def format_association_retain_tag(association_retain_ratio):
     return 'retain{:03d}'.format(int(round(ratio * 100)))
 
 
-def load_k_fold(data_name, seed, with_similarity=False, association_retain_ratio=1.0):
-    root_path = os.path.dirname(os.path.abspath(__file__))
-    data_root_candidates = [
-        os.path.join(root_path, 'drug_data'),
-        os.path.join(os.path.dirname(root_path), 'drug_data'),
-    ]
-    data_root = None
-    for candidate in data_root_candidates:
-        if os.path.isdir(candidate):
-            data_root = candidate
-            break
-    if data_root is None:
-        raise FileNotFoundError(
-            "drug_data directory not found. Expected one of: {}".format(
-                ", ".join(data_root_candidates)
-            )
-        )
-
-    drug_sim = disease_sim = None
+def load_k_fold(data_name, seed, association_retain_ratio=1.0):
+    data_root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'drug_data')
+    if not os.path.isdir(data_root):
+        raise FileNotFoundError('Place the benchmark files in drug_data/ next to run_fars_final.py.')
 
     if data_name == 'lrssl':
-        # txt dataset
-        path = os.path.join(data_root, '{}.txt'.format(data_name))
-        matrix = pd.read_table(path, index_col=0).values
-        if with_similarity:
-            raise ValueError('FARS-SA currently supports similarity inputs only for .mat datasets.')
-    elif data_name in ['Gdataset', 'Cdataset']:
-        path = os.path.join(data_root, '{}.mat'.format(data_name))
-        # mat dataset
-        data = io.loadmat(path)
+        matrix = pd.read_table(os.path.join(data_root, 'lrssl.txt'), index_col=0).values
+    elif data_name in ('Gdataset', 'Cdataset'):
+        data = io.loadmat(os.path.join(data_root, data_name + '.mat'))
         matrix = data['didr'].T
-        if with_similarity:
-            if 'drug' not in data or 'disease' not in data:
-                raise KeyError('Expected drug/disease similarity matrices in {}.'.format(path))
-            drug_sim = row_normalize_matrix(data['drug'])
-            disease_sim = row_normalize_matrix(data['disease'])
     else:
-        # csv dataset
-        path = os.path.join(data_root, '{}.csv'.format(data_name))
-        data = pd.read_csv(path, header=None)
-        matrix = data.values.T
-        if with_similarity:
-            raise ValueError('FARS-SA currently supports similarity inputs only for .mat datasets.')
+        raise ValueError('Supported datasets: Gdataset, Cdataset, lrssl.')
 
     association_retain_ratio = normalize_association_retain_ratio(association_retain_ratio)
 
@@ -513,11 +366,4 @@ def load_k_fold(data_name, seed, with_similarity=False, association_retain_ratio
                                   test_labels, u_test_idx, v_test_idx]
         count += 1
 
-    if with_similarity:
-        return split_data_dict, drug_sim, disease_sim
     return split_data_dict
-
-
-if __name__ == '__main__':
-    split_data_dict = load_k_fold('Gdataset', 1)
-
